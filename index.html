@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>小挑戰：找出正方形及長方形</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            touch-action: none;
+            background-color: #f0f4f8;
+            font-family: 'Microsoft JhengHei', sans-serif;
+            overflow: hidden;
+            user-select: none;
+        }
+        canvas {
+            cursor: pointer;
+            border-radius: 24px;
+            background-color: #ffffff;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+            max-width: 100%;
+            display: block;
+        }
+        .timer-flash {
+            animation: flash-red 0.4s infinite;
+        }
+        @keyframes flash-red {
+            0% { color: #ef4444; }
+            50% { color: #ffffff; background-color: #ef4444; border-radius: 8px; }
+            100% { color: #ef4444; }
+        }
+        .level-badge {
+            background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+            color: white;
+            padding: 4px 16px;
+            border-radius: 99px;
+            font-size: 0.8rem;
+            font-weight: 800;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+    </style>
+</head>
+<body class="flex flex-col items-center justify-center min-h-screen p-2 md:p-6">
+
+    <div id="game-container" class="w-full max-w-4xl">
+        <!-- 頂部狀態列 -->
+        <div class="bg-white/80 backdrop-blur-md rounded-3xl shadow-sm p-5 mb-4 flex justify-between items-center h-28 border border-white/50">
+            <div class="flex flex-col gap-2">
+                <span id="level-indicator" class="level-badge w-fit tracking-widest">第一關</span>
+                <div class="flex items-baseline gap-3">
+                    <span class="text-[10px] text-slate-400 font-bold uppercase tracking-tighter">Total Score 分數</span>
+                    <span id="score" class="text-3xl font-black text-indigo-600">0</span>
+                </div>
+            </div>
+
+            <div id="game-ui" class="hidden text-center scale-110">
+                <span class="text-[10px] text-slate-400 font-bold tracking-widest uppercase">尋找目標</span>
+                <div id="target-label" class="text-3xl font-black">正方形</div>
+                <div class="text-xs font-bold text-slate-500 mt-1">
+                    畫面剩餘: <span id="remaining-count" class="text-xl text-indigo-600">0</span>
+                </div>
+            </div>
+
+            <div class="text-right flex flex-col items-end">
+                <span class="text-[10px] text-slate-400 font-bold uppercase">Time 剩餘時間</span>
+                <div id="timer-display" class="text-4xl font-black text-slate-700 tabular-nums"><span id="timer">20</span>s</div>
+            </div>
+        </div>
+
+        <!-- 畫布主體 -->
+        <div class="relative bg-white/40 p-2 rounded-[32px] shadow-inner border border-white/20">
+            <canvas id="gameCanvas"></canvas>
+
+            <!-- 浮層控制台 -->
+            <div id="overlay" class="absolute inset-0 bg-white/90 backdrop-blur-sm flex flex-col items-center justify-center z-40 rounded-[30px] transition-all duration-500">
+                <div id="menu-content" class="text-center p-8 max-w-sm">
+                    <div id="icon-box" class="text-7xl mb-6 drop-shadow-lg">🌟</div>
+                    <h1 id="menu-title" class="text-3xl font-extrabold text-slate-800 mb-3">圖形大挑戰</h1>
+                    <p id="menu-body" class="text-slate-500 mb-10 text-sm leading-relaxed font-medium">
+                        每一關有 <span class="text-indigo-600 font-bold">20 秒</span>。<br>
+                        準備好證明你是圖形大師了嗎？
+                    </p>
+                    
+                    <button id="action-btn" onclick="startLevel()" class="w-64 bg-indigo-600 hover:bg-indigo-700 text-white font-black py-5 rounded-2xl shadow-xl shadow-indigo-200 transform active:scale-95 transition-all text-lg tracking-widest">
+                        開始第一關
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 答題反饋 -->
+    <div id="toast" class="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none opacity-0 z-50 px-10 py-5 rounded-3xl text-white font-black text-3xl shadow-2xl transition-all duration-300"></div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreEl = document.getElementById('score');
+        const timerEl = document.getElementById('timer');
+        const timerBox = document.getElementById('timer-display');
+        const remainingEl = document.getElementById('remaining-count');
+        const targetLabel = document.getElementById('target-label');
+        const gameUI = document.getElementById('game-ui');
+        const overlay = document.getElementById('overlay');
+        const menuTitle = document.getElementById('menu-title');
+        const menuBody = document.getElementById('menu-body');
+        const actionBtn = document.getElementById('action-btn');
+        const iconBox = document.getElementById('icon-box');
+        const levelIndicator = document.getElementById('level-indicator');
+        const toast = document.getElementById('toast');
+
+        let state = {
+            active: false,
+            score: 0,
+            levelScore: 0,
+            timeLeft: 20,
+            level: 1,
+            targetType: 'square',
+            shapes: [],
+            timerInterval: null
+        };
+
+        function initCanvas() {
+            canvas.width = canvas.parentElement.clientWidth - 16;
+            canvas.height = Math.min(window.innerHeight * 0.55, 450);
+        }
+        window.addEventListener('resize', initCanvas);
+        initCanvas();
+
+        class Shape {
+            constructor(type, x, y, size, color, rotation) {
+                this.type = type;
+                this.x = x;
+                this.y = y;
+                this.size = size;
+                const ratio = type === 'rectangle' ? (1.5 + Math.random() * 0.5) : 1;
+                this.w = size * ratio;
+                this.h = size;
+                this.color = color;
+                this.rotation = rotation;
+                this.found = false;
+                this.radius = (Math.max(this.w, this.h) / 2) + 15;
+                
+                if (type === 'quad') { // 陷阱四邊形 (非直角)
+                    const offset = 22; // 增加偏移度讓變形更明顯
+                    this.points = [
+                        {x: -this.w/2 + (Math.random()-0.5)*offset, y: -this.h/2 + (Math.random()-0.5)*offset},
+                        {x: this.w/2 + (Math.random()-0.5)*offset, y: -this.h/2 + (Math.random()-0.5)*offset},
+                        {x: this.w/2 + (Math.random()-0.5)*offset, y: this.h/2 + (Math.random()-0.5)*offset},
+                        {x: -this.w/2 + (Math.random()-0.5)*offset, y: this.h/2 + (Math.random()-0.5)*offset}
+                    ];
+                }
+            }
+
+            draw() {
+                if (this.found) return;
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                ctx.rotate(this.rotation);
+                
+                ctx.fillStyle = this.color;
+                ctx.strokeStyle = '#1e293b';
+                ctx.lineWidth = 4;
+                ctx.lineJoin = 'round';
+                
+                ctx.beginPath();
+                if (this.type === 'square' || this.type === 'rectangle') {
+                    ctx.rect(-this.w/2, -this.h/2, this.w, this.h);
+                } else if (this.type === 'quad') {
+                    ctx.moveTo(this.points[0].x, this.points[0].y);
+                    this.points.forEach(p => ctx.lineTo(p.x, p.y));
+                    ctx.closePath();
+                } else if (this.type === 'circle') {
+                    ctx.arc(0, 0, this.size/2, 0, Math.PI * 2);
+                } else if (this.type === 'triangle') {
+                    ctx.moveTo(0, -this.size/2);
+                    ctx.lineTo(this.size/2, this.size/2);
+                    ctx.lineTo(-this.size/2, this.size/2);
+                    ctx.closePath();
+                }
+                
+                ctx.fill();
+                ctx.stroke();
+                ctx.restore();
+            }
+
+            isHit(mx, my) {
+                if (this.found) return false;
+                const cos = Math.cos(-this.rotation);
+                const sin = Math.sin(-this.rotation);
+                const rx = cos * (mx - this.x) - sin * (my - this.y);
+                const ry = sin * (mx - this.x) + cos * (my - this.y);
+                return Math.abs(rx) < (this.w/2 + 10) && Math.abs(ry) < (this.h/2 + 10);
+            }
+        }
+
+        function generateShapes() {
+            state.shapes = [];
+            const colors = ['#6366f1', '#f43f5e', '#f59e0b', '#10b981', '#8b5cf6', '#06b6d4'];
+            state.targetType = Math.random() > 0.5 ? 'square' : 'rectangle';
+            
+            targetLabel.innerText = state.targetType === 'square' ? '正方形' : '長方形';
+            targetLabel.className = `text-3xl font-black ${state.targetType === 'square' ? 'text-indigo-600' : 'text-rose-500'}`;
+
+            // 根據關卡設定邏輯
+            let count, sizeRange, canRotate, pool;
+            
+            switch(state.level) {
+                case 1: 
+                    count = 6; sizeRange = [60, 80]; canRotate = false;
+                    // 第一關：目標 + 基本圓形/三角形
+                    pool = ['circle', 'triangle', (state.targetType === 'square' ? 'rectangle' : 'square')];
+                    levelIndicator.innerText = "第一關：基礎認識";
+                    break;
+                case 2: 
+                    count = 8; sizeRange = [55, 75]; canRotate = false;
+                    // 第二關：純四邊形世界，只有目標 + 其他陷阱四邊形 + 另一種目標
+                    pool = ['quad', 'quad', 'quad', (state.targetType === 'square' ? 'rectangle' : 'square')];
+                    levelIndicator.innerText = "第二關：四邊形大集合";
+                    break;
+                case 3: 
+                    count = 14; sizeRange = [35, 50]; canRotate = true;
+                    // 第三關：終極混合挑戰 (旋轉 + 縮小 + 所有類型)
+                    pool = ['circle', 'triangle', 'quad', 'quad', (state.targetType === 'square' ? 'rectangle' : 'square')];
+                    levelIndicator.innerText = "第三關：終極挑戰";
+                    break;
+            }
+
+            let tries = 0;
+            const targetCount = Math.ceil(count / 2.5); // 設定目標圖形數量
+
+            while (state.shapes.length < count && tries < 1000) {
+                tries++;
+                const isTarget = state.shapes.length < targetCount;
+                
+                let type = isTarget ? state.targetType : pool[Math.floor(Math.random() * pool.length)];
+
+                const size = sizeRange[0] + Math.random() * (sizeRange[1] - sizeRange[0]);
+                const rotation = canRotate ? Math.random() * Math.PI * 2 : 0;
+                
+                // 碰撞邊界計算
+                const r = (type === 'rectangle' || type === 'quad' ? size * 1.8 : size) / 2 + 15;
+                const x = r + Math.random() * (canvas.width - r * 2);
+                const y = r + Math.random() * (canvas.height - r * 2);
+
+                if (!state.shapes.some(s => Math.sqrt((x-s.x)**2 + (y-s.y)**2) < (r + s.radius))) {
+                    state.shapes.push(new Shape(type, x, y, size, colors[Math.floor(Math.random()*colors.length)], rotation));
+                }
+            }
+            updateUI();
+        }
+
+        function updateUI() {
+            const rem = state.shapes.filter(s => s.type === state.targetType && !s.found).length;
+            remainingEl.innerText = rem;
+            if (rem === 0 && state.active) generateShapes();
+        }
+
+        function startLevel() {
+            state.timeLeft = 20;
+            state.levelScore = 0;
+            state.active = true;
+            timerEl.innerText = "20";
+            timerBox.classList.remove('timer-flash');
+            
+            overlay.classList.add('opacity-0', 'scale-95');
+            setTimeout(() => {
+                overlay.classList.add('hidden');
+                gameUI.classList.remove('hidden');
+            }, 500);
+
+            generateShapes();
+            
+            if (state.timerInterval) clearInterval(state.timerInterval);
+            state.timerInterval = setInterval(() => {
+                state.timeLeft--;
+                timerEl.innerText = state.timeLeft;
+                if (state.timeLeft <= 5) timerBox.classList.add('timer-flash');
+                if (state.timeLeft <= 0) endLevel();
+            }, 1000);
+
+            requestAnimationFrame(render);
+        }
+
+        function endLevel() {
+            state.active = false;
+            clearInterval(state.timerInterval);
+            gameUI.classList.add('hidden');
+            
+            overlay.classList.remove('hidden');
+            setTimeout(() => overlay.classList.remove('opacity-0', 'scale-95'), 10);
+            
+            if (state.level < 3) {
+                iconBox.innerText = "👏";
+                menuTitle.innerText = `第 ${state.level} 關完成！`;
+                menuBody.innerHTML = `你在本關表現出色，獲得了 <span class="text-2xl font-bold text-indigo-600">${state.levelScore}</span> 分！<br>準備好迎接下一關了嗎？`;
+                actionBtn.innerText = "進入下一關";
+                state.level++;
+            } else {
+                iconBox.innerText = "👑";
+                menuTitle.innerText = "全關卡制霸！";
+                menuBody.innerHTML = `太強了！你已經完全掌握了幾何特徵。<br>最終總得分：<span class="text-4xl font-black text-indigo-600">${state.score}</span>`;
+                actionBtn.innerText = "重新挑戰所有關卡";
+                state.level = 1;
+                state.score = 0;
+            }
+        }
+
+        function showToast(txt, color) {
+            toast.innerText = txt;
+            toast.style.backgroundColor = color;
+            toast.classList.replace('opacity-0', 'opacity-100');
+            toast.style.transform = 'translate(-50%, -70%) scale(1.1)';
+            setTimeout(() => {
+                toast.classList.replace('opacity-100', 'opacity-0');
+                toast.style.transform = 'translate(-50%, -50%) scale(1)';
+            }, 700);
+        }
+
+        function handleInteraction(e) {
+            if (!state.active) return;
+            const rect = canvas.getBoundingClientRect();
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+            const mx = clientX - rect.left;
+            const my = clientY - rect.top;
+
+            for (let s of state.shapes) {
+                if (s.isHit(mx, my)) {
+                    if (s.type === state.targetType) {
+                        s.found = true;
+                        state.score += 10;
+                        state.levelScore += 10;
+                        showToast("答對了！✨", "#10b981");
+                    } else {
+                        state.score = Math.max(0, state.score - 5);
+                        showToast("這不是直角哦！❌", "#ef4444");
+                    }
+                    scoreEl.innerText = state.score;
+                    updateUI();
+                    break;
+                }
+            }
+        }
+
+        function render() {
+            if (!state.active) return;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = '#f8fafc';
+            ctx.fillRect(0,0,canvas.width,canvas.height);
+            ctx.fillStyle = '#e2e8f0';
+            for(let x=20; x<canvas.width; x+=40) {
+                for(let y=20; y<canvas.height; y+=40) {
+                    ctx.beginPath(); ctx.arc(x, y, 1.5, 0, Math.PI*2); ctx.fill();
+                }
+            }
+            state.shapes.forEach(s => s.draw());
+            requestAnimationFrame(render);
+        }
+
+        canvas.addEventListener('mousedown', handleInteraction);
+        canvas.addEventListener('touchstart', (e) => { e.preventDefault(); handleInteraction(e); }, {passive:false});
+
+    </script>
+</body>
+</html>
